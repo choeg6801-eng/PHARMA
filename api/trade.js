@@ -59,7 +59,7 @@ const val = row => Number(row.primaryValue ?? row.fobvalue ?? row.cifvalue) || 0
 /** 한국 수출: 최신 연도부터 거꾸로 내려가며 자료가 있는 첫 해를 씁니다. */
 async function exportRank(hs) {
   const now = new Date().getFullYear();
-  for (let y = now - 2; y >= now - 4; y--) {
+  for (let y = now - 1; y >= now - 4; y--) {
     const rows = await call({ reporterCode: '410', period: String(y), cmdCode: hs.join(','), flowCode: 'X' });
     const by = {};
     let total = 0;
@@ -80,24 +80,30 @@ async function exportRank(hs) {
 async function importDemand(hs, reporters) {
   const now = new Date().getFullYear();
   const codes = reporters.map(c => C[c][0]);
-  for (let y = now - 2; y >= now - 4; y--) {
-    // 한 번에 보내는 나라 수가 많으면 UN Comtrade가 요청을 거절할 수 있어 5개국씩 나눠 조회합니다.
-    const rows = [];
-    let lastErr = null;
-    for (let i = 0; i < codes.length; i += 5) {
-      try { rows.push(...await call({ reporterCode: codes.slice(i, i + 5).join(','), period: `${y},${y - 1}`, cmdCode: hs.join(','), flowCode: 'M', partnerCode: '0' })); }
-      catch (e) { lastErr = e; }
-    }
-    if (!rows.length && lastErr) throw lastErr;
-    const agg = {};
-    for (const r of rows) {
-      const c = BY3[r.reporterISO];
-      if (!c) continue;
-      const a = agg[c] || (agg[c] = {});
-      a[r.period] = (a[r.period] || 0) + val(r);
-    }
-    const have = Object.keys(agg).filter(c => agg[c][y] > 0).length;
-    if (have >= Math.max(3, Math.floor(reporters.length / 2))) {
+  const years = [now - 1, now - 2, now - 3];
+  // 한 번에 보내는 나라 수가 많으면 UN Comtrade가 요청을 거절할 수 있어 5개국씩 나눠 조회합니다.
+  // 최근 3개 연도를 한꺼번에 받아, 나라 절반 이상이 보고한 가장 최신 연도를 씁니다(나머지 나라는 직전 연도 값).
+  const rows = [];
+  let lastErr = null;
+  for (let i = 0; i < codes.length; i += 5) {
+    try { rows.push(...await call({ reporterCode: codes.slice(i, i + 5).join(','), period: years.join(','), cmdCode: hs.join(','), flowCode: 'M', partnerCode: '0' })); }
+    catch (e) { lastErr = e; }
+  }
+  if (!rows.length && lastErr) throw lastErr;
+  const agg = {};
+  for (const r of rows) {
+    const c = BY3[r.reporterISO];
+    if (!c) continue;
+    const a = agg[c] || (agg[c] = {});
+    a[r.period] = (a[r.period] || 0) + val(r);
+  }
+  // 연도별로 몇 개 나라가 보고했는지 함께 돌려줍니다(화면에 표시).
+  const cov = {};
+  for (const y of years) cov[y] = Object.keys(agg).filter(c => agg[c][y] > 0).length;
+  for (const y of years) {
+    const have = cov[y];
+    // 보고한 나라가 전체의 3분의 1 이상이면 그 해를 대표 연도로 씁니다(나머지 나라는 직전 연도 값).
+    if (have >= Math.max(3, Math.floor(reporters.length / 3))) {
       const out = {};
       for (const [c, a] of Object.entries(agg)) {
         const cur = a[y] > 0 ? a[y] : (a[y - 1] > 0 ? a[y - 1] : 0);
@@ -106,7 +112,7 @@ async function importDemand(hs, reporters) {
         const g = a[y] > 0 && a[y - 1] > 0 ? +(((a[y] / a[y - 1]) - 1) * 100).toFixed(1) : null;
         out[c] = { v: Math.round(cur), y: yr, g };
       }
-      return { year: y, rows: out };
+      return { year: y, rows: out, cov, n: reporters.length };
     }
   }
   return null;
