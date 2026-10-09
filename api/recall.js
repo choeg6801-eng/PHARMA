@@ -49,7 +49,10 @@ export default async function handler(req, res) {
         status: x.status || '',
         qty: short(x.product_quantity, 60),
         distribution: short(x.distribution_pattern, 120),
-        url: 'https://www.accessdata.fda.gov/scripts/ires/index.cfm',
+        // 항목마다 FDA 상세 페이지(이벤트 번호)로 연결합니다. 번호가 없으면 openFDA 원본 데이터(JSON)로 연결합니다.
+        url: x.event_id
+          ? `https://www.accessdata.fda.gov/scripts/ires/index.cfm?Event=${encodeURIComponent(x.event_id)}`
+          : `https://api.fda.gov/drug/enforcement.json?search=${enc(`recall_number:"${x.recall_number || ''}"`)}`,
       }));
       if (country) items = items.filter(i => i.country.toLowerCase().includes(country));
       for (const w of words.slice(1)) items = items.filter(i => (i.product + ' ' + i.device).toLowerCase().includes(w.toLowerCase()));

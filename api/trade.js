@@ -41,7 +41,9 @@ async function callOnce(params, tries = 0) {
   const key = KEY();
   const qs = new URLSearchParams({ ...params, partner2Code: '0', customsCode: 'C00', motCode: '0', includeDesc: 'true' });
   const url = (key ? FULL : PREVIEW) + '?' + qs;
-  const r = await fetchWithTimeout(url, key ? { headers: { 'Ocp-Apim-Subscription-Key': key } } : {}, 20000);
+  let r = await fetchWithTimeout(url, key ? { headers: { 'Ocp-Apim-Subscription-Key': key } } : {}, 20000);
+  // 키가 잘못됐거나 아직 승인 전이면(401·403) 키 없이 쓰는 공개 주소로 자동 전환합니다.
+  if (key && (r.status === 401 || r.status === 403)) r = await fetchWithTimeout(PREVIEW + '?' + qs, {}, 20000);
   if (r.status === 429 && tries < 3) {
     const ra = Number(r.headers.get('retry-after')) || 0;
     await sleep(Math.min(8000, Math.max(ra * 1000, 2500 * (tries + 1))));
@@ -79,7 +81,14 @@ async function importDemand(hs, reporters) {
   const now = new Date().getFullYear();
   const codes = reporters.map(c => C[c][0]);
   for (let y = now - 2; y >= now - 4; y--) {
-    const rows = await call({ reporterCode: codes.join(','), period: `${y},${y - 1}`, cmdCode: hs.join(','), flowCode: 'M', partnerCode: '0' });
+    // 한 번에 보내는 나라 수가 많으면 UN Comtrade가 요청을 거절할 수 있어 5개국씩 나눠 조회합니다.
+    const rows = [];
+    let lastErr = null;
+    for (let i = 0; i < codes.length; i += 5) {
+      try { rows.push(...await call({ reporterCode: codes.slice(i, i + 5).join(','), period: `${y},${y - 1}`, cmdCode: hs.join(','), flowCode: 'M', partnerCode: '0' })); }
+      catch (e) { lastErr = e; }
+    }
+    if (!rows.length && lastErr) throw lastErr;
     const agg = {};
     for (const r of rows) {
       const c = BY3[r.reporterISO];
