@@ -28,12 +28,26 @@ const C = {
 };
 const BY3 = Object.fromEntries(Object.entries(C).map(([k, v]) => [v[1], k]));
 
-async function call(params) {
+// 무료 공개 주소는 짧은 시간에 연속 호출하면 HTTP 429(너무 많은 요청)로 막습니다.
+// 그래서 호출 사이에 간격을 두고, 429가 오면 잠시 기다렸다가 다시 시도합니다.
+let chain = Promise.resolve();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function call(params) {
+  const run = chain.then(() => callOnce(params));
+  chain = run.catch(() => {}).then(() => sleep(1200));
+  return run;
+}
+async function callOnce(params, tries = 0) {
   const key = KEY();
   const qs = new URLSearchParams({ ...params, partner2Code: '0', customsCode: 'C00', motCode: '0', includeDesc: 'true' });
   const url = (key ? FULL : PREVIEW) + '?' + qs;
   const r = await fetchWithTimeout(url, key ? { headers: { 'Ocp-Apim-Subscription-Key': key } } : {}, 20000);
-  if (!r.ok) throw new Error('Comtrade HTTP ' + r.status);
+  if (r.status === 429 && tries < 3) {
+    const ra = Number(r.headers.get('retry-after')) || 0;
+    await sleep(Math.min(8000, Math.max(ra * 1000, 2500 * (tries + 1))));
+    return callOnce(params, tries + 1);
+  }
+  if (!r.ok) throw new Error('Comtrade HTTP ' + r.status + (r.status === 429 ? ' (요청 한도 초과 · 잠시 후 자동 재시도됩니다)' : ''));
   const j = await r.json();
   return Array.isArray(j.data) ? j.data : [];
 }
